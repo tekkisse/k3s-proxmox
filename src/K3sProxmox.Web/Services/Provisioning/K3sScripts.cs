@@ -137,9 +137,16 @@ public static class K3sScripts
           ui:
             enabled: true
         EOF
+        # No --wait: helm would block until the cilium-ingress LoadBalancer Service has an IP, but that IP
+        # comes from the CiliumLoadBalancerIPPool created below (its CRD only exists once Cilium runs).
         helm upgrade --install cilium cilium/cilium --version '{{c.CiliumVersion}}' \
-          --namespace kube-system -f /root/cilium-values.yaml --wait --timeout 15m
-        kubectl -n kube-system rollout status ds/cilium --timeout=10m
+          --namespace kube-system -f /root/cilium-values.yaml --timeout 15m
+        kubectl -n kube-system rollout status ds/cilium --timeout=15m
+        kubectl -n kube-system rollout status deploy/cilium-operator --timeout=10m
+        for i in $(seq 1 60); do
+          kubectl get crd ciliumloadbalancerippools.cilium.io ciliuml2announcementpolicies.cilium.io >/dev/null 2>&1 && break
+          sleep 5
+        done
         kubectl wait --for condition=established --timeout=5m crd/ciliumloadbalancerippools.cilium.io crd/ciliuml2announcementpolicies.cilium.io
         cat <<'EOF' | kubectl apply -f -
         apiVersion: cilium.io/v2alpha1
@@ -163,6 +170,12 @@ public static class K3sScripts
             - ^ens[0-9]+
             - ^enp[0-9s]+
         EOF
+        for i in $(seq 1 60); do
+          ip=$(kubectl -n kube-system get svc cilium-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+          [ "$ip" = "{{c.IngressIp}}" ] && break
+          sleep 5
+        done
+        kubectl -n kube-system get svc cilium-ingress
         echo "cilium installed"
         """;
 
