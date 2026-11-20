@@ -14,6 +14,9 @@ public static class ArgoManifests
     private static readonly ISerializer Yaml = new SerializerBuilder()
         .WithNamingConvention(NullNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
+        // Quote strings that would otherwise parse as numbers/bools/null (e.g. sync-wave "10", a revision
+        // like "1.0", a password "true"). Kubernetes rejects annotations and stringData values that aren't strings.
+        .WithQuotingNecessaryStrings()
         .DisableAliases()
         .Build();
 

@@ -158,6 +158,16 @@ public class ProvisioningTests
     }
 
     [Fact]
+    public void Argo_manifests_keep_numeric_looking_strings_as_strings()
+    {
+        var yaml = ArgoManifests.Build(Ctx, new GitSource("https://github.com/org/apps.git", "1.0", ".", "git", "12345"), []);
+        var normalized = yaml.Replace('\'', '"'); // either quote style is valid YAML
+        Assert.Contains("sync-wave: \"10\"", normalized);
+        Assert.Contains("targetRevision: \"1.0\"", normalized);
+        Assert.Contains("password: \"12345\"", normalized);
+    }
+
+    [Fact]
     public void Server_script_disables_flannel_and_kube_proxy_for_cilium()
     {
         var script = K3sScripts.InstallFirstServer(Ctx, "team-dev-server-0", "10.20.0.100");
