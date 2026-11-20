@@ -115,6 +115,9 @@ services:
 
       Network__Gateway: ${NETWORK_GATEWAY:-10.20.0.1}
       Network__PrefixLength: ${NETWORK_PREFIX_LENGTH:-24}
+      Network__DnsServers__0: ${NETWORK_DNS_SERVER_1:-10.20.0.53}
+      Network__DnsServers__1: ${NETWORK_DNS_SERVER_2:-}
+      Network__SearchDomain: ${NETWORK_SEARCH_DOMAIN:-}
       Network__NodeRangeStart: ${NETWORK_NODE_RANGE_START:-10.20.0.100}
       Network__NodeRangeEnd: ${NETWORK_NODE_RANGE_END:-10.20.0.199}
       Network__VipRangeStart: ${NETWORK_VIP_RANGE_START:-10.20.0.200}

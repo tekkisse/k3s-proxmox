@@ -149,7 +149,8 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
             ["onboot"] = "1",
             ["tags"] = spec.Tags,
         };
-        if (spec.DnsServers.Count > 0) config["nameserver"] = string.Join(' ', spec.DnsServers);
+        var nameservers = spec.DnsServers.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (nameservers.Count > 0) config["nameserver"] = string.Join(' ', nameservers);
         if (!string.IsNullOrWhiteSpace(spec.SearchDomain)) config["searchdomain"] = spec.SearchDomain!;
 
         log($"Configuring VM {vmId}: {spec.Cores} vCPU, {spec.MemoryMb} MiB, {spec.IpCidr}");
