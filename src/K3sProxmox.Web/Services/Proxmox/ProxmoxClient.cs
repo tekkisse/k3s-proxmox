@@ -69,13 +69,21 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
     /// </summary>
     public async Task<string> PickNodeAsync(IReadOnlyCollection<string> nodesAlreadyUsedByCluster, long requiredMemBytes, CancellationToken ct)
     {
-        var nodes = (await GetNodesAsync(ct))
+        var all = await GetNodesAsync(ct);
+        var nodes = all
             .Where(n => n.Status == "online")
             .Where(n => _opt.TargetNodes.Count == 0 || _opt.TargetNodes.Contains(n.Node, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         if (nodes.Count == 0)
-            throw new ProxmoxApiException("No online Proxmox nodes are available for placement.");
+        {
+            var seen = all.Count == 0
+                ? "the API returned no nodes at all - the API token most likely lacks Sys.Audit on /nodes " +
+                  "(a privilege-separated token only sees what it has been granted)"
+                : "nodes visible to the token: " + string.Join(", ", all.Select(n => $"{n.Node} ({n.Status})"));
+            var filter = _opt.TargetNodes.Count == 0 ? "" : $"; Proxmox:TargetNodes = [{string.Join(", ", _opt.TargetNodes)}]";
+            throw new ProxmoxApiException($"No online Proxmox nodes are available for placement: {seen}{filter}.");
+        }
 
         var best = nodes
             .OrderBy(n => nodesAlreadyUsedByCluster.Count(u => u == n.Node))

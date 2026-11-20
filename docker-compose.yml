@@ -111,6 +111,7 @@ services:
       Proxmox__TemplateNode: ${PROXMOX_TEMPLATE_NODE:-pve1}
       Proxmox__Storage: ${PROXMOX_STORAGE:-local-lvm}
       Proxmox__Bridge: ${PROXMOX_BRIDGE:-vmbr0}
+      Proxmox__Pool: ${PROXMOX_POOL:-}
 
       Network__Gateway: ${NETWORK_GATEWAY:-10.20.0.1}
       Network__PrefixLength: ${NETWORK_PREFIX_LENGTH:-24}
