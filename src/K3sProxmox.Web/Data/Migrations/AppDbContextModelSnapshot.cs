@@ -71,7 +71,6 @@ namespace K3sProxmox.Web.Data.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<string>("GitRepoUrl")
-                        .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 

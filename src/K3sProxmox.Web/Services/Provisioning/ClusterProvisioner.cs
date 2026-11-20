@@ -161,13 +161,21 @@ public class ClusterProvisioner(
         var standard = _defaults.StandardApps
             .Where(a => a.Required || cluster.StandardApps.Contains(a.Key))
             .ToList();
-        log($"Registering Argo CD applications: {ArgoManifests.UserAppName} ({cluster.GitRepoUrl})" +
-            (standard.Count > 0 ? ", " + string.Join(", ", standard.Select(a => a.Key)) : ""));
+        var userRepo = string.IsNullOrWhiteSpace(cluster.GitRepoUrl)
+            ? null
+            : new GitSource(cluster.GitRepoUrl, cluster.GitRevision, cluster.GitPath, cluster.GitUsername,
+                secrets.Unprotect(cluster.GitPasswordProtected));
 
-        var manifest = ArgoManifests.Build(ctx,
-            new GitSource(cluster.GitRepoUrl, cluster.GitRevision, cluster.GitPath, cluster.GitUsername,
-                secrets.Unprotect(cluster.GitPasswordProtected)),
-            standard);
+        var names = standard.Select(a => a.Key).ToList();
+        if (userRepo is not null) names.Insert(0, $"{ArgoManifests.UserAppName} ({userRepo.RepoUrl})");
+        if (names.Count == 0)
+        {
+            log("No Git repository or platform apps selected; skipping Argo CD application registration");
+            return;
+        }
+        log($"Registering Argo CD applications: {string.Join(", ", names)}");
+
+        var manifest = ArgoManifests.Build(ctx, userRepo, standard);
 
         var first = cluster.Nodes.Single(n => n.Role == NodeRole.Server && n.Ordinal == 0);
         await ssh.RunScriptAsync(Target(cluster, first), "Applying Argo CD applications", K3sScripts.ApplyManifest(manifest), log, ct);

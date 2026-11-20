@@ -17,14 +17,18 @@ public static class ArgoManifests
         .DisableAliases()
         .Build();
 
-    public static string Build(ClusterInstallContext ctx, GitSource userRepo, IEnumerable<StandardAppOptions> standardApps)
+    /// <param name="userRepo">The cluster's own GitOps repository, or null to register only the platform apps.</param>
+    public static string Build(ClusterInstallContext ctx, GitSource? userRepo, IEnumerable<StandardAppOptions> standardApps)
     {
         var docs = new List<object>();
 
-        if (!string.IsNullOrEmpty(userRepo.Username) || !string.IsNullOrEmpty(userRepo.Password))
-            docs.Add(RepoSecret("repo-workloads", userRepo.RepoUrl, userRepo.Username, userRepo.Password));
+        if (userRepo is not null)
+        {
+            if (!string.IsNullOrEmpty(userRepo.Username) || !string.IsNullOrEmpty(userRepo.Password))
+                docs.Add(RepoSecret("repo-workloads", userRepo.RepoUrl, userRepo.Username, userRepo.Password));
 
-        docs.Add(UserApplication(userRepo));
+            docs.Add(UserApplication(userRepo));
+        }
 
         foreach (var app in standardApps)
             docs.Add(StandardApplication(ctx, app));

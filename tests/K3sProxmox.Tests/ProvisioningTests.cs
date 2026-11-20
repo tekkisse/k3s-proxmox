@@ -148,6 +148,16 @@ public class ProvisioningTests
     }
 
     [Fact]
+    public void Argo_manifests_without_user_repo_contain_only_platform_apps()
+    {
+        var app = new StandardAppOptions { Key = "cert-manager", RepoUrl = "https://charts.jetstack.io", Chart = "cert-manager", TargetRevision = "v1.16.0", Namespace = "cert-manager" };
+        var yaml = ArgoManifests.Build(Ctx, null, [app]);
+        Assert.DoesNotContain("kind: Secret", yaml);
+        Assert.DoesNotContain("name: workloads", yaml);
+        Assert.Contains("name: cert-manager", yaml);
+    }
+
+    [Fact]
     public void Server_script_disables_flannel_and_kube_proxy_for_cilium()
     {
         var script = K3sScripts.InstallFirstServer(Ctx, "team-dev-server-0", "10.20.0.100");

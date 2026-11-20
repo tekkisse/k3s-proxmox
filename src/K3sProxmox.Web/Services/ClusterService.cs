@@ -52,6 +52,8 @@ public class ClusterService(
             .Union(_limits.StandardApps.Where(a => a.Required).Select(a => a.Key))
             .Distinct().ToList();
 
+        var hasRepo = !string.IsNullOrWhiteSpace(m.GitRepoUrl);
+
         var cluster = new Cluster
         {
             Name = m.Name,
@@ -65,11 +67,12 @@ public class ClusterService(
             NodeMemoryMb = m.MemoryGb * 1024,
             NodeDiskGb = m.DiskGb,
             Fqdn = $"{m.Name}.{_dns.BaseDomain}",
-            GitRepoUrl = m.GitRepoUrl.Trim(),
+            GitRepoUrl = hasRepo ? m.GitRepoUrl!.Trim() : null,
             GitRevision = string.IsNullOrWhiteSpace(m.GitRevision) ? "HEAD" : m.GitRevision.Trim(),
             GitPath = string.IsNullOrWhiteSpace(m.GitPath) ? "." : m.GitPath.Trim(),
-            GitUsername = string.IsNullOrWhiteSpace(m.GitUsername) ? null : m.GitUsername.Trim(),
-            GitPasswordProtected = secrets.Protect(string.IsNullOrWhiteSpace(m.GitPassword) ? null : m.GitPassword),
+            // Credentials are only kept when there is a repository to use them with.
+            GitUsername = !hasRepo || string.IsNullOrWhiteSpace(m.GitUsername) ? null : m.GitUsername.Trim(),
+            GitPasswordProtected = secrets.Protect(!hasRepo || string.IsNullOrWhiteSpace(m.GitPassword) ? null : m.GitPassword),
             StandardApps = apps,
         };
 

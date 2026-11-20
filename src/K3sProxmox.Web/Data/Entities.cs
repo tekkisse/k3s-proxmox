@@ -91,8 +91,9 @@ public class Cluster
     public string? IngressIp { get; set; }
 
     // --- GitOps (user's own products) ---
+    /// <summary>Optional. When null, no "workloads" Argo CD application is created.</summary>
     [MaxLength(512)]
-    public required string GitRepoUrl { get; set; }
+    public string? GitRepoUrl { get; set; }
 
     [MaxLength(128)]
     public string GitRevision { get; set; } = "HEAD";

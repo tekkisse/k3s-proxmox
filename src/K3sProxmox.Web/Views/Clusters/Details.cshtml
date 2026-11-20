@@ -65,11 +65,18 @@
             <div class="card-body">
                 <dl class="row mb-0">
                     <dt class="col-sm-4">Repository</dt>
-                    <dd class="col-sm-8 text-break"><code>@c.GitRepoUrl</code></dd>
-                    <dt class="col-sm-4">Revision / path</dt>
-                    <dd class="col-sm-8"><code>@c.GitRevision</code> / <code>@c.GitPath</code></dd>
-                    <dt class="col-sm-4">Credentials</dt>
-                    <dd class="col-sm-8">@(c.GitUsername is null && c.GitPasswordProtected is null ? "public repository" : $"as {c.GitUsername ?? "token"}")</dd>
+                    @if (string.IsNullOrWhiteSpace(c.GitRepoUrl))
+                    {
+                        <dd class="col-sm-8"><span class="text-muted">none</span></dd>
+                    }
+                    else
+                    {
+                        <dd class="col-sm-8 text-break"><code>@c.GitRepoUrl</code></dd>
+                        <dt class="col-sm-4">Revision / path</dt>
+                        <dd class="col-sm-8"><code>@c.GitRevision</code> / <code>@c.GitPath</code></dd>
+                        <dt class="col-sm-4">Credentials</dt>
+                        <dd class="col-sm-8">@(c.GitUsername is null && c.GitPasswordProtected is null ? "public repository" : $"as {c.GitUsername ?? "token"}")</dd>
+                    }
                     <dt class="col-sm-4">Platform apps</dt>
                     <dd class="col-sm-8">
                         @if (Model.StandardApps.Count == 0) { <span class="text-muted">none</span> }

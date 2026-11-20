@@ -33,9 +33,9 @@ public class CreateClusterViewModel
     [Required, Display(Name = "k3s version")]
     public string K3sVersion { get; set; } = "";
 
-    [Required, Url, Display(Name = "Git repository URL")]
+    [Url, Display(Name = "Git repository URL (optional)")]
     [RegularExpression("^https://.+", ErrorMessage = "Use an https:// git URL.")]
-    public string GitRepoUrl { get; set; } = "";
+    public string? GitRepoUrl { get; set; }
 
     [Display(Name = "Revision (branch, tag or commit)"), StringLength(128)]
     public string GitRevision { get; set; } = "HEAD";
