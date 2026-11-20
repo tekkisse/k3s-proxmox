@@ -72,6 +72,16 @@ builder.Services.AddAuthentication(o =>
         o.Scope.Add("openid");
         o.Scope.Add("profile");
         o.Scope.Add("email");
+        if (!keycloak.RequireHttpsMetadata)
+        {
+            // Plain-HTTP deployments (e.g. http://<host-ip>:8081): the default correlation/nonce cookies are
+            // SameSite=None + Secure, which browsers drop over HTTP on anything but localhost ("Correlation failed").
+            // Keycloak and the app share the host, so the callback is same-site and Lax cookies survive it.
+            o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            o.CorrelationCookie.SameSite = SameSiteMode.Lax;
+            o.NonceCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            o.NonceCookie.SameSite = SameSiteMode.Lax;
+        }
         o.TokenValidationParameters.NameClaimType = "preferred_username";
         o.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
         o.Events.OnTokenValidated = ctx =>

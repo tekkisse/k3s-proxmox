@@ -33,10 +33,12 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      # Browsers reach Keycloak on localhost:8080; the app container reaches it on keycloak:8080.
-      # A fixed frontend hostname keeps the token issuer stable, and the dynamic backchannel lets the
-      # app call the token/JWKS endpoints via the internal name.
-      KC_HOSTNAME: http://localhost:8080
+      # Browsers reach Keycloak on KEYCLOAK_PUBLIC_URL (default localhost:8080); the app container reaches
+      # it on keycloak:8080. A fixed frontend hostname keeps the token issuer stable, and the dynamic
+      # backchannel lets the app call the token/JWKS endpoints via the internal name.
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      # Substituted into deploy/keycloak/platform-realm.json as an extra allowed redirect URI.
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8081}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
     ports:
@@ -94,7 +96,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=k3sproxmox;Username=k3sproxmox;Password=k3sproxmox
 
-      Keycloak__Authority: http://localhost:8080/realms/platform
+      Keycloak__Authority: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}/realms/platform
       Keycloak__MetadataAddress: http://keycloak:8080/realms/platform/.well-known/openid-configuration
       Keycloak__RequireHttpsMetadata: "false"
       Keycloak__ClientId: k3s-proxmox
