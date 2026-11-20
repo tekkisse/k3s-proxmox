@@ -1,0 +1,216 @@
+@model ClusterDetailsViewModel
+@{
+    var c = Model.Cluster;
+    ViewData["Title"] = c.Name;
+    var latest = Model.Operations.FirstOrDefault();
+    var busy = Model.HasActiveOperation;
+    var isReady = c.Status == ClusterStatus.Ready;
+}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h1 class="h3 mb-1">@c.Name <span id="cluster-status"><partial name="_StatusBadge" model="@c.Status.ToString()" /></span></h1>
+        <div class="text-muted">@c.Description</div>
+        <div class="small text-muted">Owner @c.OwnerName · created @c.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC · k3s @c.K3sVersion</div>
+    </div>
+    @if (Model.CanRetry && !busy)
+    {
+        <form asp-action="Retry" asp-route-id="@c.Id" method="post">
+            <button class="btn btn-warning" type="submit">Retry last operation</button>
+        </form>
+    }
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Access</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">API server</dt>
+                    <dd class="col-sm-8"><code>https://api.@c.Fqdn:6443</code>@if (c.ApiAddress is not null) { <span class="text-muted"> (@c.ApiAddress)</span> }</dd>
+
+                    <dt class="col-sm-4">Ingress</dt>
+                    <dd class="col-sm-8"><code>*.@c.Fqdn</code>@if (c.IngressIp is not null) { <span class="text-muted"> → @c.IngressIp</span> }</dd>
+
+                    <dt class="col-sm-4">Kubeconfig</dt>
+                    <dd class="col-sm-8">
+                        @if (c.KubeconfigProtected is not null)
+                        {
+                            <a class="btn btn-sm btn-outline-primary" asp-action="Kubeconfig" asp-route-id="@c.Id">Download kubeconfig</a>
+                        }
+                        else { <span class="text-muted">Available once provisioning completes</span> }
+                    </dd>
+
+                    <dt class="col-sm-4">Argo CD</dt>
+                    <dd class="col-sm-8">
+                        @if (c.ArgoCdUrl is not null)
+                        {
+                            <a href="@c.ArgoCdUrl" target="_blank" rel="noopener">@c.ArgoCdUrl</a>
+                            <div class="mt-1">
+                                user <code>@c.ArgoCdUsername</code>
+                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="reveal-argo">Show password</button>
+                                <code id="argo-password" class="ms-2"></code>
+                            </div>
+                        }
+                        else { <span class="text-muted">Available once provisioning completes</span> }
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">GitOps</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Repository</dt>
+                    <dd class="col-sm-8 text-break"><code>@c.GitRepoUrl</code></dd>
+                    <dt class="col-sm-4">Revision / path</dt>
+                    <dd class="col-sm-8"><code>@c.GitRevision</code> / <code>@c.GitPath</code></dd>
+                    <dt class="col-sm-4">Credentials</dt>
+                    <dd class="col-sm-8">@(c.GitUsername is null && c.GitPasswordProtected is null ? "public repository" : $"as {c.GitUsername ?? "token"}")</dd>
+                    <dt class="col-sm-4">Platform apps</dt>
+                    <dd class="col-sm-8">
+                        @if (Model.StandardApps.Count == 0) { <span class="text-muted">none</span> }
+                        @foreach (var a in Model.StandardApps) { <span class="badge bg-light text-dark border me-1">@a.DisplayName</span> }
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Nodes</span>
+        <span class="small text-muted">@c.NodeCpu vCPU · @(c.NodeMemoryMb / 1024) GB RAM · @c.NodeDiskGb GB disk per node</span>
+    </div>
+    <div class="card-body p-0">
+        <table class="table mb-0 align-middle">
+            <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>IP</th><th>VMID</th><th>Proxmox host</th></tr></thead>
+            <tbody id="node-rows">
+            @foreach (var n in c.Nodes.OrderBy(n => n.Role).ThenBy(n => n.Ordinal))
+            {
+                <tr>
+                    <td>@n.Name</td><td>@n.Role</td><td><partial name="_StatusBadge" model="@n.Status.ToString()" /></td>
+                    <td>@n.IpAddress</td><td>@n.VmId</td><td>@n.ProxmoxNode</td>
+                </tr>
+            }
+            @if (c.Nodes.Count == 0)
+            {
+                <tr><td colspan="6" class="text-muted">Nodes will appear once provisioning starts.</td></tr>
+            }
+            </tbody>
+        </table>
+    </div>
+    @if (isReady && !busy)
+    {
+        <div class="card-footer">
+            <form asp-action="Resize" method="post" class="row g-2 align-items-center">
+                <input type="hidden" name="Id" value="@c.Id" />
+                <div class="col-auto"><label for="WorkerCount" class="col-form-label">Worker nodes</label></div>
+                <div class="col-auto">
+                    <input type="number" class="form-control" id="WorkerCount" name="WorkerCount" min="0" max="@Model.MaxWorkers" value="@c.WorkerCount" />
+                </div>
+                <div class="col-auto"><button type="submit" class="btn btn-outline-primary">Resize</button></div>
+                <div class="col-auto small text-muted">Scaling down drains and removes the newest workers first.</div>
+            </form>
+        </div>
+    }
+</div>
+
+<div class="card mt-4">
+    <div class="card-header d-flex justify-content-between">
+        <span>Current operation: <strong id="op-title">@(latest is null ? "none" : $"{latest.Type}")</strong>
+            <span id="op-status">@if (latest is not null) { <partial name="_StatusBadge" model="@latest.Status.ToString()" /> }</span></span>
+        @if (busy) { <span class="small text-muted">updating live</span> }
+    </div>
+    <div class="card-body">
+        <div id="op-error" class="alert alert-danger @(latest?.Error is null ? "d-none" : "")">@latest?.Error</div>
+        <pre id="op-log" class="bg-dark text-light p-3 rounded small mb-0" style="max-height: 420px; overflow:auto; white-space: pre-wrap;">@latest?.Log</pre>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">Operation history</div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead><tr><th>Type</th><th>Status</th><th>Requested by</th><th>Queued</th><th>Finished</th></tr></thead>
+            <tbody>
+            @foreach (var o in Model.Operations)
+            {
+                <tr>
+                    <td>@o.Type @(o.TargetWorkerCount is { } t ? $"→ {t} workers" : "")</td>
+                    <td><partial name="_StatusBadge" model="@o.Status.ToString()" /></td>
+                    <td>@o.RequestedBy</td>
+                    <td>@o.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                    <td>@o.CompletedAt?.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if (!busy)
+{
+    <div class="card border-danger mt-4">
+        <div class="card-header text-danger">Delete cluster</div>
+        <div class="card-body">
+            <p class="mb-2">Destroys all virtual machines, removes DNS records and releases IP addresses. This cannot be undone.</p>
+            <form asp-action="Delete" asp-route-id="@c.Id" method="post" class="row g-2">
+                <div class="col-auto"><input name="confirmName" class="form-control" placeholder="type @c.Name to confirm" autocomplete="off" /></div>
+                <div class="col-auto"><button type="submit" class="btn btn-danger">Delete</button></div>
+            </form>
+        </div>
+    </div>
+}
+
+@section Scripts {
+<script>
+(function () {
+    const id = '@c.Id';
+    const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+
+    document.getElementById('reveal-argo')?.addEventListener('click', async (e) => {
+        const r = await fetch('@Url.Action("ArgoCdPassword", new { id = c.Id })', {
+            method: 'POST', headers: { 'RequestVerificationToken': token }
+        });
+        if (r.ok) {
+            const d = await r.json();
+            document.getElementById('argo-password').textContent = d.password;
+            e.target.remove();
+        }
+    });
+
+    @if (busy)
+    {
+        <text>
+    const log = document.getElementById('op-log');
+    log.scrollTop = log.scrollHeight;
+    const timer = setInterval(async () => {
+        const r = await fetch('@Url.Action("Status", new { id = c.Id })', { cache: 'no-store' });
+        if (!r.ok) { clearInterval(timer); location = '@Url.Action("Index")'; return; }
+        const d = await r.json();
+        if (d.operation) {
+            const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+            log.textContent = d.operation.log;
+            if (atBottom) log.scrollTop = log.scrollHeight;
+            document.getElementById('op-status').textContent = d.operation.status;
+            if (d.operation.status === 'Succeeded' || d.operation.status === 'Failed') {
+                clearInterval(timer);
+                setTimeout(() => location.reload(), 1000);
+            }
+        }
+        const rows = d.nodes.map(n => `<tr><td>${esc(n.name)}</td><td>${n.role}</td><td>${n.status}</td><td>${n.ipAddress ?? ''}</td><td>${n.vmId ?? ''}</td><td>${esc(n.proxmoxNode ?? '')}</td></tr>`);
+        if (rows.length) document.getElementById('node-rows').innerHTML = rows.join('');
+        document.getElementById('cluster-status').textContent = d.status;
+    }, 4000);
+        </text>
+    }
+
+    function esc(s) { return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+})();
+</script>
+}

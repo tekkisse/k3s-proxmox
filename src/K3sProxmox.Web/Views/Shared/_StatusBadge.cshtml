@@ -1,0 +1,12 @@
+@model string
+@{
+    var css = Model switch
+    {
+        "Ready" or "Succeeded" => "bg-success",
+        "Failed" => "bg-danger",
+        "Deleting" or "Draining" => "bg-warning text-dark",
+        "Queued" or "Pending" => "bg-secondary",
+        _ => "bg-info text-dark",
+    };
+}
+<span class="badge @css" data-status-badge>@Model</span>

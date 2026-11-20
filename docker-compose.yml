@@ -1,0 +1,139 @@
+# Full stack: PostgreSQL, Keycloak (pre-configured "platform" realm), PowerDNS (authoritative for the
+# cluster sub-domain) and the application.
+#
+#   cp .env.example .env        # fill in Proxmox / network / DNS settings (optional for UI-only testing)
+#   docker compose up -d --build
+#   open http://localhost:8081   (login dev / dev = admin, user / user = regular user)
+#
+# Keycloak admin console: http://localhost:8080 (admin / admin)
+#
+# To run the app from your IDE instead, start only the dependencies:
+#   docker compose up -d postgres keycloak
+#   dotnet run --project src/K3sProxmox.Web      -> http://localhost:5014
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: k3sproxmox
+      POSTGRES_USER: k3sproxmox
+      POSTGRES_PASSWORD: k3sproxmox
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U k3sproxmox -d k3sproxmox"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Browsers reach Keycloak on localhost:8080; the app container reaches it on keycloak:8080.
+      # A fixed frontend hostname keeps the token issuer stable, and the dynamic backchannel lets the
+      # app call the token/JWKS endpoints via the internal name.
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/keycloak/platform-realm.json:/opt/keycloak/data/import/platform-realm.json:ro
+    # Keycloak takes ~30-60s to build, initialise its DB and import the realm. The image has no curl,
+    # so probe the management port's readiness endpoint with bash /dev/tcp.
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Authoritative DNS for the delegated sub-domain (default tetredns.chi.swan.ac.uk).
+  # Active Directory delegates / forwards that sub-domain to this server (see README "Self-hosted DNS").
+  # Only port 53 is published; the management API (8081) stays on the internal compose network.
+  powerdns:
+    image: powerdns/pdns-auth-49:4.9.18
+    environment:
+      PDNS_AUTH_API_KEY: ${PDNS_API_KEY:-dev-pdns-api-key}
+    command:
+      - --primary=yes
+      # AD DNS servers that hold a secondary copy of the zone (comma separated); others are refused AXFR.
+      - --allow-axfr-ips=${PDNS_ALLOW_AXFR_IPS:-127.0.0.0/8}
+      - --also-notify=${PDNS_ALSO_NOTIFY:-}
+      - --default-soa-content=${PDNS_NS_NAME:-ns1}.@ hostmaster.@ 0 10800 3600 604800 300
+    ports:
+      - "${PDNS_BIND_IP:-0.0.0.0}:${PDNS_DNS_PORT:-53}:53/udp"
+      - "${PDNS_BIND_IP:-0.0.0.0}:${PDNS_DNS_PORT:-53}:53/tcp"
+    volumes:
+      # The image ships an initialised SQLite DB; a new named volume is seeded from it on first start.
+      - pdnsdata:/var/lib/powerdns
+    healthcheck:
+      test: ["CMD", "pdns_control", "rping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: k3s-proxmox:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      powerdns:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=k3sproxmox;Username=k3sproxmox;Password=k3sproxmox
+
+      Keycloak__Authority: http://localhost:8080/realms/platform
+      Keycloak__MetadataAddress: http://keycloak:8080/realms/platform/.well-known/openid-configuration
+      Keycloak__RequireHttpsMetadata: "false"
+      Keycloak__ClientId: k3s-proxmox
+      Keycloak__ClientSecret: dev-client-secret
+
+      # Infrastructure settings come from .env (see .env.example); the value after ":-" is used when unset.
+      Proxmox__BaseUrl: ${PROXMOX_BASE_URL:-https://pve1.example.com:8006}
+      Proxmox__TokenId: ${PROXMOX_TOKEN_ID:-}
+      Proxmox__TokenSecret: ${PROXMOX_TOKEN_SECRET:-}
+      Proxmox__IgnoreTlsErrors: ${PROXMOX_IGNORE_TLS_ERRORS:-false}
+      Proxmox__TemplateVmId: ${PROXMOX_TEMPLATE_VMID:-9000}
+      Proxmox__TemplateNode: ${PROXMOX_TEMPLATE_NODE:-pve1}
+      Proxmox__Storage: ${PROXMOX_STORAGE:-local-lvm}
+      Proxmox__Bridge: ${PROXMOX_BRIDGE:-vmbr0}
+
+      Network__Gateway: ${NETWORK_GATEWAY:-10.20.0.1}
+      Network__PrefixLength: ${NETWORK_PREFIX_LENGTH:-24}
+      Network__NodeRangeStart: ${NETWORK_NODE_RANGE_START:-10.20.0.100}
+      Network__NodeRangeEnd: ${NETWORK_NODE_RANGE_END:-10.20.0.199}
+      Network__VipRangeStart: ${NETWORK_VIP_RANGE_START:-10.20.0.200}
+      Network__VipRangeEnd: ${NETWORK_VIP_RANGE_END:-10.20.0.249}
+
+      # Clusters get <name>.<zone>; records live in the self-hosted PowerDNS above.
+      Dns__Provider: PowerDns
+      Dns__BaseDomain: ${DNS_ZONE:-tetredns.chi.swan.ac.uk}
+      Dns__Zone: ${DNS_ZONE:-tetredns.chi.swan.ac.uk}
+      Dns__Ttl: "300"
+      Dns__PowerDns__ApiUrl: http://powerdns:8081
+      Dns__PowerDns__ApiKey: ${PDNS_API_KEY:-dev-pdns-api-key}
+      Dns__PowerDns__AutoCreateZone: "true"
+      Dns__PowerDns__NameserverName: ${PDNS_NS_NAME:-ns1}
+      Dns__PowerDns__NameserverIp: ${PDNS_NS_IP:-}
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET /healthz HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  pgdata:
+  pdnsdata:

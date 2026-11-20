@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/K3sProxmox.Web/K3sProxmox.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/K3sProxmox.Tests/K3sProxmox.Tests.csproj" />
+  </Folder>
+</Solution>

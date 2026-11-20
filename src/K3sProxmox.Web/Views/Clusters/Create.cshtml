@@ -1,0 +1,138 @@
+@model CreateClusterViewModel
+@{
+    ViewData["Title"] = "Request a cluster";
+    var limits = Model.Limits!;
+}
+<h1 class="h3 mb-4">Request a Kubernetes cluster</h1>
+
+<form asp-action="Create" method="post" autocomplete="off">
+    <div asp-validation-summary="All" class="text-danger mb-3"></div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card">
+                <div class="card-header">Cluster</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label asp-for="Name" class="form-label"></label>
+                        <div class="input-group">
+                            <input asp-for="Name" class="form-control" placeholder="team-dev" />
+                            <span class="input-group-text">.@Model.BaseDomain</span>
+                        </div>
+                        <div class="form-text">Ingress hosts will be <code>*.&lt;name&gt;.@Model.BaseDomain</code>.</div>
+                        <span asp-validation-for="Name" class="text-danger"></span>
+                    </div>
+                    <div class="mb-3">
+                        <label asp-for="Description" class="form-label"></label>
+                        <input asp-for="Description" class="form-control" />
+                    </div>
+                    <div class="mb-3">
+                        <label asp-for="K3sVersion" class="form-label"></label>
+                        <select asp-for="K3sVersion" asp-items="@(new SelectList(Model.AvailableK3sVersions))" class="form-select"></select>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label asp-for="ControlPlaneCount" class="form-label"></label>
+                            <select asp-for="ControlPlaneCount" class="form-select">
+                                <option value="1">1 (single)</option>
+                                <option value="3">3 (highly available)</option>
+                            </select>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label asp-for="WorkerCount" class="form-label"></label>
+                            <input asp-for="WorkerCount" type="number" min="0" max="@(limits.MaxNodesPerCluster - 1)" class="form-control" />
+                            <span asp-validation-for="WorkerCount" class="text-danger"></span>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-4 mb-3">
+                            <label asp-for="Cpu" class="form-label"></label>
+                            <input asp-for="Cpu" type="number" min="1" max="@limits.MaxCpuPerNode" class="form-control" />
+                        </div>
+                        <div class="col-4 mb-3">
+                            <label asp-for="MemoryGb" class="form-label"></label>
+                            <input asp-for="MemoryGb" type="number" min="2" max="@limits.MaxMemoryGbPerNode" class="form-control" />
+                        </div>
+                        <div class="col-4 mb-3">
+                            <label asp-for="DiskGb" class="form-label"></label>
+                            <input asp-for="DiskGb" type="number" min="@limits.MinDiskGb" max="@limits.MaxDiskGb" class="form-control" />
+                        </div>
+                    </div>
+                    <div class="form-text">
+                        Limits: @limits.MaxNodesPerCluster nodes, @limits.MaxCpuPerNode vCPU and @limits.MaxMemoryGbPerNode GB per node.
+                        Every node runs Cilium; Argo CD runs on the cluster.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card mb-4">
+                <div class="card-header">GitOps: your products</div>
+                <div class="card-body">
+                    <p class="small text-muted">Argo CD will sync this repository (recursively) into the cluster as the <code>workloads</code> application.</p>
+                    <div class="mb-3">
+                        <label asp-for="GitRepoUrl" class="form-label"></label>
+                        <input asp-for="GitRepoUrl" class="form-control" placeholder="https://git.example.com/team/deployments.git" />
+                        <span asp-validation-for="GitRepoUrl" class="text-danger"></span>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label asp-for="GitRevision" class="form-label"></label>
+                            <input asp-for="GitRevision" class="form-control" />
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label asp-for="GitPath" class="form-label"></label>
+                            <input asp-for="GitPath" class="form-control" />
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label asp-for="GitUsername" class="form-label"></label>
+                            <input asp-for="GitUsername" class="form-control" />
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label asp-for="GitPassword" class="form-label"></label>
+                            <input asp-for="GitPassword" class="form-control" autocomplete="new-password" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Standard platform applications</div>
+                <div class="card-body">
+                    @if (Model.AvailableStandardApps.Count == 0)
+                    {
+                        <p class="text-muted mb-0">No standard applications are configured.</p>
+                    }
+                    @foreach (var app in Model.AvailableStandardApps)
+                    {
+                        var isChecked = app.Required || Model.SelectedStandardApps.Contains(app.Key);
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" name="SelectedStandardApps" value="@app.Key" id="app-@app.Key"
+                                   checked="@isChecked" disabled="@app.Required" />
+                            @if (app.Required)
+                            {
+                                <input type="hidden" name="SelectedStandardApps" value="@app.Key" />
+                            }
+                            <label class="form-check-label" for="app-@app.Key">
+                                @app.DisplayName @if (app.Required) { <span class="badge bg-secondary">required</span> }
+                                @if (!string.IsNullOrEmpty(app.Description)) { <div class="small text-muted">@app.Description</div> }
+                            </label>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <button type="submit" class="btn btn-primary">Create cluster</button>
+        <a asp-action="Index" class="btn btn-link">Cancel</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
