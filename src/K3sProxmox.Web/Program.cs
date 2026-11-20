@@ -76,7 +76,11 @@ builder.Services.AddAuthentication(o =>
         {
             // Plain-HTTP deployments (e.g. http://<host-ip>:8081): the default correlation/nonce cookies are
             // SameSite=None + Secure, which browsers drop over HTTP on anything but localhost ("Correlation failed").
-            // Keycloak and the app share the host, so the callback is same-site and Lax cookies survive it.
+            // Lax cookies are only sent on a cross-site *GET* navigation, so the callback must be a redirect
+            // (response_mode=query) rather than the default auto-submitted form_post: if the browser sees Keycloak
+            // and the app as different sites (different hostname/IP, e.g. localhost vs 10.x), a POST callback
+            // arrives without the correlation cookie.
+            o.ResponseMode = OpenIdConnectResponseMode.Query;
             o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             o.CorrelationCookie.SameSite = SameSiteMode.Lax;
             o.NonceCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
