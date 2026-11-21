@@ -39,6 +39,18 @@ public static class K3sScripts
         fs.inotify.max_user_watches = 1048576
         EOF
         sysctl --system >/dev/null
+        # Fail early, with a useful message, if the node can't resolve public names (k3s/helm/images need it)
+        for i in $(seq 1 30); do getent hosts get.k3s.io >/dev/null && break; sleep 2; done
+        if ! getent hosts get.k3s.io >/dev/null; then
+          {
+            echo "DNS resolution is not working on $(hostname): cannot resolve get.k3s.io"
+            echo "--- resolvers (check NETWORK_DNS_SERVER_* in .env) ---"
+            resolvectl dns 2>/dev/null || cat /etc/resolv.conf
+            echo "--- default route ---"
+            ip route show default
+          } >&2
+          exit 1
+        fi
         command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl)
         echo "node prepared: $(hostname)"
         """;
@@ -73,7 +85,7 @@ public static class K3sScripts
         sb.AppendLine("  - servicelb");
         sb.AppendLine("write-kubeconfig-mode: \"0600\"");
         sb.AppendLine("EOF");
-        sb.AppendLine($"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='{c.K3sVersion}' sh -s - server");
+        sb.AppendLine($"curl -sSfL --retry 5 --retry-delay 3 --retry-all-errors https://get.k3s.io | INSTALL_K3S_VERSION='{c.K3sVersion}' sh -s - server");
         sb.Append(Kubeconfig);
         sb.AppendLine("for i in $(seq 1 120); do kubectl get --raw=/readyz >/dev/null 2>&1 && break; sleep 5; done");
         sb.AppendLine("kubectl get --raw=/readyz");
@@ -92,14 +104,14 @@ public static class K3sScripts
         sb.AppendLine($"node-name: \"{nodeName}\"");
         sb.AppendLine($"node-ip: \"{nodeIp}\"");
         sb.AppendLine("EOF");
-        sb.AppendLine($"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='{c.K3sVersion}' sh -s - agent");
+        sb.AppendLine($"curl -sSfL --retry 5 --retry-delay 3 --retry-all-errors https://get.k3s.io | INSTALL_K3S_VERSION='{c.K3sVersion}' sh -s - agent");
         sb.AppendLine("echo \"k3s agent running on $(hostname)\"");
         return sb.ToString();
     }
 
     public static string InstallHelm(ClusterInstallContext c) => $"""
         if ! command -v helm >/dev/null 2>&1; then
-          curl -fsSL '{c.HelmInstallScriptUrl}' | bash
+          curl -sSfL --retry 5 --retry-delay 3 --retry-all-errors '{c.HelmInstallScriptUrl}' | bash
         fi
         helm version --short
         """;
