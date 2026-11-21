@@ -70,8 +70,8 @@ services:
     ports:
       - "${PDNS_BIND_IP:-0.0.0.0}:${PDNS_DNS_PORT:-53}:53/udp"
       - "${PDNS_BIND_IP:-0.0.0.0}:${PDNS_DNS_PORT:-53}:53/tcp"
-      - "${PDNS_NETBIRD_IP:-100.119.191.183}:5353:53/udp"
-      - "${PDNS_NETBIRD_IP:-100.119.191.183}:5353:53/tcp"
+      #- "${PDNS_NETBIRD_IP:-100.119.191.183}:5353:53/udp"
+      #- "${PDNS_NETBIRD_IP:-100.119.191.183}:5353:53/tcp"
     volumes:
       # The image ships an initialised SQLite DB; a new named volume is seeded from it on first start.
       - pdnsdata:/var/lib/powerdns
