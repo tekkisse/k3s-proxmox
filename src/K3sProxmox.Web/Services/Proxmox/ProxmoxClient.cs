@@ -130,7 +130,8 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
 
                 try
                 {
-                    upid = (await PostAsync($"nodes/{_opt.TemplateNode}/qemu/{_opt.TemplateVmId}/clone", form, ct)).GetString()!;
+                    // Not cancellable: once Proxmox may have accepted the clone we must learn (and persist) its VMID.
+                    upid = (await PostAsync($"nodes/{_opt.TemplateNode}/qemu/{_opt.TemplateVmId}/clone", form, CancellationToken.None)).GetString()!;
                     break;
                 }
                 catch (ProxmoxApiException ex) when (attempt < 5 && ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
@@ -147,6 +148,7 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
         }
 
         if (onVmIdAssigned is not null) await onVmIdAssigned(vmId);
+        ct.ThrowIfCancellationRequested();
 
         await WaitForTaskAsync(_opt.TemplateNode, upid, ct);
 
@@ -187,7 +189,7 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
     /// <summary>Stops and destroys a VM wherever it currently lives. Missing VMs are ignored.</summary>
     public async Task DestroyVmAsync(int vmId, Action<string> log, CancellationToken ct)
     {
-        var vm = (await GetVmsAsync(ct)).FirstOrDefault(v => v.VmId == vmId);
+        var vm = await WaitForUnlockedAsync(vmId, log, ct);
         if (vm is null)
         {
             log($"VM {vmId} not found on Proxmox, nothing to destroy");
@@ -204,6 +206,40 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
         log($"Destroying VM {vmId} on {vm.Node}");
         var del = (await SendAsync(HttpMethod.Delete, $"nodes/{vm.Node}/qemu/{vmId}?purge=1&destroy-unreferenced-disks=1", null, ct)).GetString()!;
         await WaitForTaskAsync(vm.Node, del, ct);
+    }
+
+    /// <summary>
+    /// Returns the VM once it carries no lock (e.g. a clone that was still running when its operation was
+    /// cancelled), or null if it does not exist. The VM's node is re-read each time because a clone with
+    /// target= moves the VM to its target node when it finishes.
+    /// </summary>
+    private async Task<ProxmoxVmInfo?> WaitForUnlockedAsync(int vmId, Action<string> log, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(_opt.TaskTimeoutSeconds);
+        var logged = false;
+        while (true)
+        {
+            var vm = (await GetVmsAsync(ct)).FirstOrDefault(v => v.VmId == vmId);
+            if (vm is null) return null;
+
+            JsonElement cfg;
+            try { cfg = await GetAsync($"nodes/{vm.Node}/qemu/{vmId}/config", ct); }
+            catch (ProxmoxApiException) when (DateTime.UtcNow < deadline)
+            {
+                // The config may be moving between nodes right now; look again.
+                await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                continue;
+            }
+
+            if (!cfg.TryGetProperty("lock", out var lck) || DateTime.UtcNow >= deadline) return vm;
+
+            if (!logged)
+            {
+                log($"VM {vmId} is locked ({lck.GetString()}), waiting for the Proxmox task to finish");
+                logged = true;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
     }
 
     private async Task EnsureDiskSizeAsync(string node, int vmId, int diskGb, Action<string> log, CancellationToken ct)

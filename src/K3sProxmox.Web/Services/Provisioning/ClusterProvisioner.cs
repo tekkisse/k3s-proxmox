@@ -20,6 +20,7 @@ public class ClusterProvisioner(
     IDnsProvider dns,
     IIpAllocator ipAllocator,
     ISecretProtector secrets,
+    OperationCancellation cancellation,
     IOptions<ProxmoxOptions> proxmoxOptions,
     IOptions<NetworkOptions> networkOptions,
     IOptions<ClusterDefaultsOptions> clusterOptions,
@@ -55,6 +56,15 @@ public class ClusterProvisioner(
 
             op.Status = OperationStatus.Succeeded;
             log.Write($"{op.Type} completed successfully");
+        }
+        catch (Exception) when (ct.IsCancellationRequested && cancellation.WasCancelledByUser(op.Id))
+        {
+            // "Cancel and delete": a Delete operation is already queued behind this one and cleans up.
+            logger.LogWarning("Operation {Op} ({Type}) for cluster {Cluster} was cancelled by a user", op.Id, op.Type, cluster.Name);
+            log.Write("CANCELLED by user; the cluster will be deleted");
+            op.Status = OperationStatus.Failed;
+            op.Error = "Cancelled by user.";
+            cluster.Status = ClusterStatus.Deleting;
         }
         catch (Exception ex)
         {
@@ -356,10 +366,10 @@ public class ClusterProvisioner(
             var nodeId = n.Id;
             n.VmId = await proxmox.CreateVmAsync(spec, n.ProxmoxNode!, log, ct, async vmId =>
             {
-                // Persist the VMID as soon as it exists so a crash never orphans a VM.
-                await using var side = await dbFactory.CreateDbContextAsync(ct);
+                // Persist the VMID as soon as it exists so a crash or cancel never orphans a VM.
+                await using var side = await dbFactory.CreateDbContextAsync(CancellationToken.None);
                 await side.ClusterNodes.Where(x => x.Id == nodeId)
-                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.VmId, vmId), ct);
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.VmId, vmId), CancellationToken.None);
             });
         }, ct);
 

@@ -1,6 +1,7 @@
 using K3sProxmox.Web.Data;
 using K3sProxmox.Web.Models;
 using K3sProxmox.Web.Options;
+using K3sProxmox.Web.Services.Provisioning;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -12,6 +13,7 @@ public class ClusterRequestException(string message) : Exception(message);
 public class ClusterService(
     AppDbContext db,
     ISecretProtector secrets,
+    OperationCancellation cancellation,
     IOptions<ClusterDefaultsOptions> clusterOptions,
     IOptions<DnsOptions> dnsOptions)
 {
@@ -111,6 +113,62 @@ public class ClusterService(
     public async Task RequestDeleteAsync(Guid id, CurrentUser user, CancellationToken ct)
     {
         var cluster = await FindAsync(id, user, ct) ?? throw new ClusterRequestException("Cluster not found.");
+        await EnqueueAsync(cluster, OperationType.Delete, null, user, ct);
+    }
+
+    /// <summary>
+    /// Stops whatever operation is queued or running for the cluster and queues a Delete that removes
+    /// everything created so far (VMs, DNS records, IP reservations).
+    /// </summary>
+    public async Task RequestCancelAndDeleteAsync(Guid id, CurrentUser user, CancellationToken ct)
+    {
+        var cluster = await FindAsync(id, user, ct) ?? throw new ClusterRequestException("Cluster not found.");
+        var active = await db.ClusterOperations
+            .Where(o => o.ClusterId == id && (o.Status == OperationStatus.Queued || o.Status == OperationStatus.Running))
+            .OrderByDescending(o => o.CreatedAt).FirstOrDefaultAsync(ct);
+
+        if (active is null)
+        {
+            await EnqueueAsync(cluster, OperationType.Delete, null, user, ct);
+            return;
+        }
+        if (active.Type == OperationType.Delete)
+            throw new ClusterRequestException("The cluster is already being deleted.");
+
+        // Not started yet: just withdraw it.
+        var withdrawn = await db.ClusterOperations
+            .Where(o => o.Id == active.Id && o.Status == OperationStatus.Queued)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status, OperationStatus.Failed)
+                .SetProperty(o => o.Error, "Cancelled by user.")
+                .SetProperty(o => o.CompletedAt, DateTimeOffset.UtcNow), ct);
+        if (withdrawn > 0)
+        {
+            await EnqueueAsync(cluster, OperationType.Delete, null, user, ct);
+            return;
+        }
+
+        if (cancellation.Cancel(active.Id))
+        {
+            // The running operation owns the cluster row until it stops (it sets the status to Deleting),
+            // so only add the Delete here; the worker starts it once the cancelled operation has finished.
+            db.ClusterOperations.Add(new ClusterOperation
+            {
+                ClusterId = id,
+                Type = OperationType.Delete,
+                RequestedBy = user.DisplayName,
+            });
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
+        // Marked Running but nothing in this process is executing it: a stale record.
+        await db.ClusterOperations
+            .Where(o => o.Id == active.Id && o.Status == OperationStatus.Running)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status, OperationStatus.Failed)
+                .SetProperty(o => o.Error, "Cancelled by user (operation was no longer running).")
+                .SetProperty(o => o.CompletedAt, DateTimeOffset.UtcNow), ct);
         await EnqueueAsync(cluster, OperationType.Delete, null, user, ct);
     }
 

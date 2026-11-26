@@ -13,6 +13,7 @@ namespace K3sProxmox.Web.Services.Provisioning;
 /// </summary>
 public class OperationWorker(
     IServiceScopeFactory scopeFactory,
+    OperationCancellation cancellation,
     IOptions<ClusterDefaultsOptions> options,
     ILogger<OperationWorker> logger) : BackgroundService
 {
@@ -81,15 +82,22 @@ public class OperationWorker(
             if (_running.Count >= options.Value.MaxConcurrentOperations) break;
             if (!started.Add(c.ClusterId)) continue; // one operation per cluster at a time
 
+            // Register before claiming so a cancel request that sees the operation as Running can always reach it.
+            var cts = cancellation.Register(c.Id, ct);
+
             // Atomically claim the operation.
             var claimed = await db.ClusterOperations
                 .Where(o => o.Id == c.Id && o.Status == OperationStatus.Queued)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status, OperationStatus.Running)
                     .SetProperty(o => o.StartedAt, DateTimeOffset.UtcNow), ct);
-            if (claimed == 0) continue;
+            if (claimed == 0)
+            {
+                cancellation.Unregister(c.Id);
+                continue;
+            }
 
-            _running[c.Id] = Task.Run(() => RunAsync(c.Id, ct), CancellationToken.None);
+            _running[c.Id] = Task.Run(() => RunAsync(c.Id, cts.Token), CancellationToken.None);
         }
     }
 
@@ -122,6 +130,7 @@ public class OperationWorker(
         finally
         {
             _running.TryRemove(operationId, out _);
+            cancellation.Unregister(operationId);
         }
     }
 

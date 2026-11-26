@@ -156,6 +156,7 @@ builder.Services.AddSingleton<ISshRunner, SshRunner>();
 builder.Services.AddScoped<IIpAllocator, IpAllocator>();
 builder.Services.AddScoped<ClusterService>();
 builder.Services.AddScoped<ClusterProvisioner>();
+builder.Services.AddSingleton<OperationCancellation>();
 builder.Services.AddHostedService<OperationWorker>();
 builder.Services.AddHostedService<DnsZoneBootstrapper>();
 

@@ -133,6 +133,22 @@ public class ClustersController(
         return await Run(id, () => clusters.RequestDeleteAsync(id, Me, ct), $"Deletion of '{cluster.Name}' queued.");
     }
 
+    /// <summary>Stops a queued or running (e.g. stuck) operation and deletes everything created so far.</summary>
+    [HttpPost]
+    public async Task<IActionResult> CancelAndDelete(Guid id, string confirmName, CancellationToken ct)
+    {
+        var cluster = await clusters.FindAsync(id, Me, ct);
+        if (cluster is null) return NotFound();
+        if (!string.Equals(confirmName?.Trim(), cluster.Name, StringComparison.Ordinal))
+        {
+            TempData["Error"] = "Type the cluster name exactly to confirm.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+        logger.LogWarning("User {User} cancelled the current operation of cluster {Cluster} and requested deletion", Me.DisplayName, cluster.Name);
+        return await Run(id, () => clusters.RequestCancelAndDeleteAsync(id, Me, ct),
+            $"Cancelling the current operation; '{cluster.Name}' will then be deleted.");
+    }
+
     [HttpGet]
     public async Task<IActionResult> Kubeconfig(Guid id, CancellationToken ct)
     {

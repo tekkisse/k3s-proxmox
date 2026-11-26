@@ -173,6 +173,20 @@
         </div>
     </div>
 }
+else if (latest is not null && latest.Type != OperationType.Delete)
+{
+    <div class="card border-danger mt-4">
+        <div class="card-header text-danger">Cancel and delete</div>
+        <div class="card-body">
+            <p class="mb-2">Stops the current @latest.Type.ToString().ToLowerInvariant() operation, then destroys any virtual machines created so far,
+                removes DNS records and releases IP addresses. Use this if provisioning is stuck; you can then create the cluster again.</p>
+            <form asp-action="CancelAndDelete" asp-route-id="@c.Id" method="post" class="row g-2">
+                <div class="col-auto"><input name="confirmName" class="form-control" placeholder="type @c.Name to confirm" autocomplete="off" /></div>
+                <div class="col-auto"><button type="submit" class="btn btn-danger">Cancel and delete</button></div>
+            </form>
+        </div>
+    </div>
+}
 
 @section Scripts {
 <script>
