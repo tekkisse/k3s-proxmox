@@ -27,7 +27,10 @@ public record VmSpec(
     string Tags,
     string Description);
 
-public class ProxmoxApiException(string message) : Exception(message);
+public class ProxmoxApiException(string message, int? statusCode = null) : Exception(message)
+{
+    public int? StatusCode { get; } = statusCode;
+}
 
 /// <summary>Thin client over the Proxmox VE REST API (API token authentication).</summary>
 public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> options, ILogger<ProxmoxClient> logger)
@@ -106,23 +109,37 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
         await CloneLock.WaitAsync(ct);
         try
         {
-            vmId = await FindFreeVmIdAsync(ct);
-            log($"Cloning template {_opt.TemplateVmId} -> VM {vmId} ({spec.Name}) on {targetNode}");
-
-            var form = new Dictionary<string, string>
+            var skip = new HashSet<int>();
+            for (var attempt = 1; ; attempt++)
             {
-                ["newid"] = vmId.ToString(CultureInfo.InvariantCulture),
-                ["name"] = spec.Name,
-                ["full"] = "1",
-                ["storage"] = _opt.Storage,
-                ["description"] = spec.Description,
-            };
-            if (!string.Equals(targetNode, _opt.TemplateNode, StringComparison.OrdinalIgnoreCase))
-                form["target"] = targetNode;
-            if (!string.IsNullOrWhiteSpace(_opt.Pool))
-                form["pool"] = _opt.Pool!;
+                vmId = await FindFreeVmIdAsync(skip, ct);
+                log($"Cloning template {_opt.TemplateVmId} -> VM {vmId} ({spec.Name}) on {targetNode}");
 
-            upid = (await PostAsync($"nodes/{_opt.TemplateNode}/qemu/{_opt.TemplateVmId}/clone", form, ct)).GetString()!;
+                var form = new Dictionary<string, string>
+                {
+                    ["newid"] = vmId.ToString(CultureInfo.InvariantCulture),
+                    ["name"] = spec.Name,
+                    ["full"] = "1",
+                    ["storage"] = _opt.Storage,
+                    ["description"] = spec.Description,
+                };
+                if (!string.Equals(targetNode, _opt.TemplateNode, StringComparison.OrdinalIgnoreCase))
+                    form["target"] = targetNode;
+                if (!string.IsNullOrWhiteSpace(_opt.Pool))
+                    form["pool"] = _opt.Pool!;
+
+                try
+                {
+                    upid = (await PostAsync($"nodes/{_opt.TemplateNode}/qemu/{_opt.TemplateVmId}/clone", form, ct)).GetString()!;
+                    break;
+                }
+                catch (ProxmoxApiException ex) when (attempt < 5 && ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                {
+                    // VMIDs are cluster-wide; something else (or a VM the token cannot see) grabbed this one.
+                    log($"VMID {vmId} is already in use elsewhere in the Proxmox cluster, trying the next one");
+                    skip.Add(vmId);
+                }
+            }
         }
         finally
         {
@@ -227,11 +244,27 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
     [GeneratedRegex(@"size=(\d+(?:\.\d+)?)([KMGT])", RegexOptions.IgnoreCase)]
     private static partial Regex SizeRegex();
 
-    private async Task<int> FindFreeVmIdAsync(CancellationToken ct)
+    /// <summary>
+    /// Finds a VMID in the configured range that is unused across the whole Proxmox cluster.
+    /// cluster/resources only lists VMs the token may audit, so each candidate is confirmed with
+    /// cluster/nextid?vmid=N, which checks the cluster-wide VM list regardless of permissions.
+    /// </summary>
+    private async Task<int> FindFreeVmIdAsync(IReadOnlySet<int> skip, CancellationToken ct)
     {
         var used = (await GetVmsAsync(ct)).Select(v => v.VmId).ToHashSet();
         for (var id = _opt.VmIdRangeStart; id <= _opt.VmIdRangeEnd; id++)
-            if (!used.Contains(id)) return id;
+        {
+            if (used.Contains(id) || skip.Contains(id)) continue;
+            try
+            {
+                await GetAsync($"cluster/nextid?vmid={id}", ct);
+                return id;
+            }
+            catch (ProxmoxApiException ex) when (ex.StatusCode == 400)
+            {
+                // "VM <id> already exists" - taken by a VM this token cannot see.
+            }
+        }
         throw new ProxmoxApiException($"No free VMID in range {_opt.VmIdRangeStart}-{_opt.VmIdRangeEnd}.");
     }
 
@@ -266,7 +299,7 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
         using var resp = await http.SendAsync(req, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
-            throw new ProxmoxApiException($"Proxmox {method} {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} {body}");
+            throw new ProxmoxApiException($"Proxmox {method} {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} {body}", (int)resp.StatusCode);
 
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
         return doc.RootElement.TryGetProperty("data", out var data) ? data.Clone() : default;
