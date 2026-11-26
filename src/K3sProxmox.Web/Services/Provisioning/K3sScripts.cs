@@ -228,6 +228,11 @@ public static class K3sScripts
 
     public static string ReadKubeconfig() => "cat /etc/rancher/k3s/k3s.yaml";
 
+    /// <summary>Prints one line per registered Kubernetes node: "&lt;name&gt; &lt;True|False|Unknown&gt;" (Ready condition).</summary>
+    public static string ListNodes() => Kubeconfig + """
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+        """;
+
     public static string DrainAndDeleteNode(string nodeName) => Kubeconfig + $"""
         if kubectl get node '{nodeName}' >/dev/null 2>&1; then
           kubectl cordon '{nodeName}'

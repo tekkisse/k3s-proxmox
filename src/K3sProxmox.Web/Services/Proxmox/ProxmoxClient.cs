@@ -281,6 +281,23 @@ public partial class ProxmoxClient(HttpClient http, IOptions<ProxmoxOptions> opt
     private static partial Regex SizeRegex();
 
     /// <summary>
+    /// True if the VMID is used anywhere in the Proxmox cluster, including by VMs this token cannot see
+    /// (which cluster/resources silently omits).
+    /// </summary>
+    public async Task<bool> VmIdInUseAsync(int vmId, CancellationToken ct)
+    {
+        try
+        {
+            await GetAsync($"cluster/nextid?vmid={vmId}", ct);
+            return false;
+        }
+        catch (ProxmoxApiException ex) when (ex.StatusCode == 400)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Finds a VMID in the configured range that is unused across the whole Proxmox cluster.
     /// cluster/resources only lists VMs the token may audit, so each candidate is confirmed with
     /// cluster/nextid?vmid=N, which checks the cluster-wide VM list regardless of permissions.

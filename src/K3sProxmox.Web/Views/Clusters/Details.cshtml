@@ -121,7 +121,7 @@
                     <input type="number" class="form-control" id="WorkerCount" name="WorkerCount" min="0" max="@Model.MaxWorkers" value="@c.WorkerCount" />
                 </div>
                 <div class="col-auto"><button type="submit" class="btn btn-outline-primary">Resize</button></div>
-                <div class="col-auto small text-muted">Scaling down drains and removes the newest workers first.</div>
+                <div class="col-auto small text-muted">Every worker is checked first and missing or broken ones are rebuilt; scaling down removes broken, then the newest workers. Keep the same count to just repair.</div>
             </form>
         </div>
     }

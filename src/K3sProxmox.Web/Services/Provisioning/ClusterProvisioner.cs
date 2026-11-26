@@ -193,28 +193,89 @@ public class ClusterProvisioner(
 
     // ------------------------------------------------------------------ resize
 
+    /// <summary>
+    /// Brings the cluster to exactly <paramref name="targetWorkers"/> healthy agents. The actual state is checked
+    /// first (VM running in Proxmox and node Ready in Kubernetes), so agents that have gone missing are rebuilt
+    /// under their original names, surplus agents are removed (broken ones first, then the newest), and the
+    /// result is verified at the end. Resizing to the current count therefore acts as a repair.
+    /// </summary>
     private async Task ResizeAsync(Cluster cluster, int targetWorkers, Action<string> log, CancellationToken ct)
     {
         cluster.Status = ClusterStatus.Resizing;
         await db.SaveChangesAsync(ct);
 
         var first = cluster.Nodes.Single(n => n.Role == NodeRole.Server && n.Ordinal == 0);
+        var firstTarget = Target(cluster, first);
         static bool Leaving(ClusterNode n) => n.Status is NodeStatus.Draining or NodeStatus.Deleting;
         static bool NeedsProvisioning(ClusterNode n) => n.Status is NodeStatus.Provisioning or NodeStatus.Failed;
+        List<ClusterNode> Agents() => cluster.Nodes.Where(n => n.Role == NodeRole.Agent).ToList();
 
-        var agents = cluster.Nodes.Where(n => n.Role == NodeRole.Agent).OrderBy(n => n.Ordinal).ToList();
-        var staying = agents.Count(a => !Leaving(a));
-        log($"Resizing workers: {staying} -> {targetWorkers}");
+        // 1. Observe what really exists.
+        log("Checking the current state of the worker nodes");
+        var vms = (await proxmox.GetVmsAsync(ct)).ToDictionary(v => v.VmId);
+        var k8s = await GetKubernetesNodesAsync(firstTarget, log, ct);
 
-        // Scale up, or repair agents left half-provisioned by a failed attempt.
-        if (targetWorkers > staying || agents.Any(NeedsProvisioning))
+        foreach (var a in Agents().Where(a => !Leaving(a)).OrderBy(a => a.Ordinal))
         {
-            var nextOrdinal = agents.Count == 0 ? 0 : agents.Max(a => a.Ordinal) + 1;
-            for (var i = staying; i < targetWorkers; i++)
-                await EnsureNodeRecordAsync(cluster, NodeRole.Agent, nextOrdinal++, ct);
-            await db.SaveChangesAsync(ct);
+            var vm = a.VmId is { } id && vms.TryGetValue(id, out var v) ? v : null;
+            if (vm is null && a.VmId is { } hidden && await proxmox.VmIdInUseAsync(hidden, ct))
+                throw new ProxmoxApiException(
+                    $"VM {hidden} ({a.Name}) exists in Proxmox but the API token cannot see it. Grant the token " +
+                    "VM.Audit on /vms (or on the pool) so the cluster can be checked safely.");
 
-            var pending = cluster.Nodes.Where(n => n.Role == NodeRole.Agent && NeedsProvisioning(n)).ToList();
+            var vmRunning = vm?.Status == "running";
+            var k8sReady = k8s.TryGetValue(a.Name, out var ready) && ready;
+            if (vm is not null) a.ProxmoxNode = vm.Node;
+
+            if (vmRunning && k8sReady)
+            {
+                a.Status = NodeStatus.Ready;
+                continue;
+            }
+
+            var problem = vm is null ? "VM is missing"
+                : !vmRunning ? $"VM {vm.VmId} is {vm.Status}"
+                : k8s.ContainsKey(a.Name) ? "node is NotReady in Kubernetes"
+                : "node is not registered in Kubernetes";
+            log($"{a.Name}: {problem}; it will be repaired or replaced");
+            if (vm is null) a.VmId = null;
+            a.Status = NodeStatus.Failed;
+        }
+        await db.SaveChangesAsync(ct);
+
+        var current = Agents().Where(a => !Leaving(a)).ToList();
+        log($"Resizing workers: {current.Count(a => a.Status == NodeStatus.Ready)} healthy of {current.Count} -> {targetWorkers}");
+
+        // 2. Remove surplus agents: those already leaving, then broken ones, then the newest.
+        var keep = current
+            .OrderBy(a => a.Status == NodeStatus.Ready ? 0 : 1).ThenBy(a => a.Ordinal)
+            .Take(targetWorkers).ToHashSet();
+        var toRemove = Agents().Where(a => !keep.Contains(a))
+            .OrderByDescending(Leaving).ThenBy(a => a.Status == NodeStatus.Ready ? 1 : 0).ThenByDescending(a => a.Ordinal)
+            .ToList();
+        foreach (var n in toRemove)
+        {
+            n.Status = NodeStatus.Draining;
+            await db.SaveChangesAsync(ct);
+            await ssh.RunScriptAsync(firstTarget, $"Draining and removing {n.Name}",
+                K3sScripts.DrainAndDeleteNode(n.Name), log, ct, timeout: TimeSpan.FromMinutes(15));
+            await RemoveNodeAsync(n, log, ct);
+        }
+
+        // 3. Add agents for any shortfall, reusing the lowest free ordinals (so a lost agent-0 comes back as agent-0).
+        var ordinals = Agents().Select(a => a.Ordinal).ToHashSet();
+        for (var o = 0; Agents().Count < targetWorkers; o++)
+        {
+            if (ordinals.Contains(o)) continue;
+            await EnsureNodeRecordAsync(cluster, NodeRole.Agent, o, ct);
+            log($"Adding {cluster.Name}-agent-{o}");
+        }
+        await db.SaveChangesAsync(ct);
+
+        // 4. Provision or repair everything that is not healthy. Running VMs are kept; k3s is (re)installed on them.
+        var pending = Agents().Where(NeedsProvisioning).ToList();
+        if (pending.Count > 0)
+        {
             await EnsureVmsAsync(cluster, pending, log, ct);
 
             var ctx = BuildContext(cluster);
@@ -226,27 +287,39 @@ public class ClusterProvisioner(
                 await ssh.RunScriptAsync(target, "Joining k3s agent", K3sScripts.InstallAgent(ctx, n.Name, n.IpAddress!), log, ct);
             }, ct);
 
-            await ssh.RunScriptAsync(Target(cluster, first), "Waiting for new nodes to become Ready",
+            await ssh.RunScriptAsync(firstTarget, "Waiting for nodes to become Ready",
                 K3sScripts.WaitForNodesReady(pending.Select(n => n.Name)), log, ct);
             foreach (var n in pending) n.Status = NodeStatus.Ready;
             await db.SaveChangesAsync(ct);
         }
 
-        // Scale down: nodes already on their way out first, then the newest agents.
-        agents = cluster.Nodes.Where(n => n.Role == NodeRole.Agent)
-            .OrderByDescending(Leaving).ThenByDescending(n => n.Ordinal).ToList();
-        var toRemove = agents.Take(Math.Max(0, agents.Count - targetWorkers)).ToList();
-        foreach (var n in toRemove)
-        {
-            n.Status = NodeStatus.Draining;
-            await db.SaveChangesAsync(ct);
-            await ssh.RunScriptAsync(Target(cluster, first), $"Draining and removing {n.Name}",
-                K3sScripts.DrainAndDeleteNode(n.Name), log, ct, timeout: TimeSpan.FromMinutes(15));
-            await RemoveNodeAsync(n, log, ct);
-        }
+        // 5. Remove Kubernetes agent nodes that no longer have a record (left over from earlier failed removals).
+        k8s = await GetKubernetesNodesAsync(firstTarget, log, ct);
+        var known = Agents().Select(a => a.Name).ToHashSet();
+        foreach (var stale in k8s.Keys.Where(k => k.StartsWith($"{cluster.Name}-agent-", StringComparison.Ordinal) && !known.Contains(k)))
+            await ssh.RunScriptAsync(firstTarget, $"Removing stale Kubernetes node {stale}",
+                K3sScripts.DrainAndDeleteNode(stale), log, ct, timeout: TimeSpan.FromMinutes(15));
+
+        // 6. Verify.
+        var readyAgents = Agents().Count(a => k8s.TryGetValue(a.Name, out var r) && r);
+        if (Agents().Count != targetWorkers || readyAgents != targetWorkers)
+            throw new InvalidOperationException(
+                $"Expected {targetWorkers} Ready worker(s) but found {readyAgents} Ready of {Agents().Count} recorded. Retry to repair.");
+        log($"Verified {readyAgents} Ready worker node(s)");
 
         cluster.WorkerCount = targetWorkers;
         cluster.Status = ClusterStatus.Ready;
+    }
+
+    /// <summary>Kubernetes node name -> Ready, as seen from the first server.</summary>
+    private async Task<Dictionary<string, bool>> GetKubernetesNodesAsync(SshTarget firstServer, Action<string> log, CancellationToken ct)
+    {
+        var output = await ssh.RunScriptAsync(firstServer, "Listing Kubernetes nodes", K3sScripts.ListNodes(), log, ct, logOutput: false);
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(l => l.Split(' ', 2))
+            .Where(p => p.Length >= 1 && p[0].Length > 0)
+            .GroupBy(p => p[0])
+            .ToDictionary(g => g.Key, g => g.First().Length == 2 && g.First()[1] == "True");
     }
 
     // ------------------------------------------------------------------ delete

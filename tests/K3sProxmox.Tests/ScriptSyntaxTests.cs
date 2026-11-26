@@ -12,7 +12,7 @@ public class ScriptSyntaxTests
 
     public static TheoryData<string> Scripts() => new()
     {
-        "prepare", "server0", "server1", "agent", "helm", "cilium", "wait", "argocd", "apply", "drain",
+        "prepare", "server0", "server1", "agent", "helm", "cilium", "wait", "argocd", "apply", "drain", "list",
     };
 
     [Theory]
@@ -33,6 +33,7 @@ public class ScriptSyntaxTests
                 new GitSource("https://git.example.com/a.git", "main", ".", "u", "p"),
                 [new StandardAppOptions { Key = "x", RepoUrl = "https://c.example.com", Chart = "x", HelmValues = "a: 1\n" }])),
             "drain" => K3sScripts.DrainAndDeleteNode("a0"),
+            "list" => K3sScripts.ListNodes(),
             _ => throw new ArgumentOutOfRangeException(nameof(name)),
         };
 

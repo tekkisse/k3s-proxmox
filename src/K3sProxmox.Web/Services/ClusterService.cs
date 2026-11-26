@@ -104,9 +104,7 @@ public class ClusterService(
             throw new ClusterRequestException("Only clusters in the Ready state can be resized.");
         if (workers < 0 || cluster.ControlPlaneCount + workers > _limits.MaxNodesPerCluster)
             throw new ClusterRequestException($"Worker count must be between 0 and {_limits.MaxNodesPerCluster - cluster.ControlPlaneCount}.");
-        if (workers == cluster.WorkerCount)
-            throw new ClusterRequestException("The cluster already has that many workers.");
-
+        // Resizing to the current count is allowed: it checks every worker and repairs or replaces missing ones.
         await EnqueueAsync(cluster, OperationType.Resize, workers, user, ct);
     }
 
